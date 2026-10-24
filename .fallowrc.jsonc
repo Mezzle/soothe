@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/fallow/schema.json",
+  // Electron loads preload independently; the desktop check is a separate script.
+  "entry": ["electron/main.cjs", "electron/preload.cjs", "src/main.ts", "tests/desktop.cjs", "tests/*.test.cjs"],
+  "ignorePatterns": ["dist/**", "release/**", "reports/**", "test-results/**", ".stryker-tmp/**", ".claude/**"],
+  "rules": {
+    "unused-files": "error",
+    "unused-exports": "error",
+    "unused-dev-dependencies": "error",
+    "unused-optional-dependencies": "error",
+    "stale-suppressions": "error"
+  },
+  // Match fin's complexity ceilings; test strength is measured by Stryker.
+  "health": { "maxCyclomatic": 20, "maxCognitive": 15, "maxCrap": 0 }
+}

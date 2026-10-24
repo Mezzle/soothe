@@ -8,12 +8,16 @@ export class ReceivedNewlines {
     for (const byte of data) {
       // LF advances the terminal row but needs CR to return to column one.
       // Remember CR across reads because USB chunks need not end on a line.
-      if (byte === 10 && !this.previousWasCR) output[length++] = 13;
+      if (byte === 10 && !this.previousWasCR) {
+        output[length++] = 13;
+      }
       output[length++] = byte;
       this.previousWasCR = byte === 13;
     }
     return output.subarray(0, length);
   }
 
-  reset(): void { this.previousWasCR = false; }
+  reset(): void {
+    this.previousWasCR = false;
+  }
 }
