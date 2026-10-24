@@ -1,0 +1,49 @@
+{
+  "name": "soothe",
+  "version": "0.1.0",
+  "description": "A Ghostty-powered USB serial console for macOS",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "start": "npm run build && electron .",
+    "test": "node --test tests/*.test.cjs",
+    "test:desktop": "npm run build && node tests/desktop.cjs",
+    "package": "npm run build && electron-builder --mac dir"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "ghostty-web": "^0.4.0",
+    "serialport": "^13.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^26.6.5",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  },
+  "build": {
+    "appId": "dev.soothe.console",
+    "productName": "Soothe",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "identity": null
+    },
+    "asarUnpack": [
+      "**/*.node"
+    ]
+  }
+}
