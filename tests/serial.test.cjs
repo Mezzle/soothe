@@ -223,3 +223,194 @@ test("write and drain errors reach the caller", async () => {
     await session.disconnect();
   }
 });
+
+test("retired ports cannot publish bytes, errors, or status into a new connection", async () => {
+  const session = new SerialSession(Port);
+  const statuses = [];
+  const received = [];
+  session.on("status", (status) => statuses.push(status));
+  session.on("data", (data) => received.push(...data));
+  await session.connect({ path: "/dev/test", baudRate: 115200 });
+  const oldPort = session.port;
+  await session.disconnect();
+  await session.connect({ path: "/dev/test", baudRate: 9600 });
+  const expected = [...statuses];
+  oldPort.emit("close");
+  oldPort.emit("error", new Error("retired device failed"));
+  oldPort.emit("data", Buffer.from([42]));
+  assert.deepEqual(statuses, expected);
+  assert.deepEqual(received, []);
+  assert.equal(session.port.isOpen, true);
+  await session.disconnect();
+});
+
+test("failed-open ports cannot publish events after retry", async () => {
+  let failedPort;
+  class FailsOpen extends Port {
+    open(callback) {
+      failedPort = this;
+      callback(new Error("open failed"));
+    }
+  }
+  const session = new SerialSession(FailsOpen);
+  const statuses = [];
+  const received = [];
+  session.on("status", (status) => statuses.push(status));
+  session.on("data", (data) => received.push(...data));
+  await assert.rejects(session.connect({ path: "/dev/test", baudRate: 115200 }), /open failed/);
+  session.Port = Port;
+  await session.connect({ path: "/dev/test", baudRate: 9600 });
+  const expected = [...statuses];
+  failedPort.emit("error", new Error("late open error"));
+  failedPort.emit("data", Buffer.from([42]));
+  failedPort.emit("close");
+  assert.deepEqual(statuses, expected);
+  assert.deepEqual(received, []);
+  await session.disconnect();
+});
+
+test("close before the open callback never publishes a successful connection", async () => {
+  class ClosesDuringOpen extends Port {
+    open(callback) {
+      this.emit("close");
+      callback();
+    }
+  }
+  const session = new SerialSession(ClosesDuringOpen);
+  const statuses = [];
+  session.on("status", (status) => statuses.push(status));
+  await assert.rejects(session.connect({ path: "/dev/test", baudRate: 115200 }), /closed before opening completed/);
+  assert.deepEqual(statuses, [{ connected: false }]);
+  assert.equal(session.port, null);
+  assert.equal(session.busy, false);
+});
+
+test("shutdown waits for discovery and blocks new opens until cleanup finishes", async () => {
+  let finishDiscovery;
+  let port;
+  class DiscoveringPort extends Port {
+    constructor(options) {
+      super(options);
+      port = this;
+    }
+    static list() {
+      return new Promise((resolve) => {
+        finishDiscovery = () => resolve([{ path: "/dev/test" }]);
+      });
+    }
+  }
+  const session = new SerialSession(DiscoveringPort);
+  const opening = session.connect({ path: "/dev/test", baudRate: 115200 });
+  const shutdown = session.shutdown();
+  assert.equal(session.shutdown(), shutdown);
+  let finished = false;
+  void shutdown.then(() => {
+    finished = true;
+  });
+  await Promise.resolve();
+  assert.equal(finished, false);
+  finishDiscovery();
+  await opening;
+  await assert.rejects(session.connect({ path: "/dev/test", baudRate: 115200 }), /Disconnect/);
+  await shutdown;
+  assert.equal(port.isOpen, false);
+  assert.equal(session.port, null);
+  assert.equal(session.busy, false);
+  session.Port = Port;
+  await session.connect({ path: "/dev/test", baudRate: 115200 });
+  await session.disconnect();
+});
+
+test("shutdown waits for an open callback even after an unrelated error event", async () => {
+  let port;
+  class OpeningPort extends Port {
+    open(callback) {
+      port = this;
+      this.finishOpen = () => {
+        this.isOpen = true;
+        callback();
+      };
+    }
+  }
+  const session = new SerialSession(OpeningPort);
+  const opening = session.connect({ path: "/dev/test", baudRate: 115200 });
+  await new Promise((resolve) => setImmediate(resolve));
+  const shutdown = session.shutdown();
+  port.emit("error", new Error("stream error"));
+  assert.equal(session.busy, true);
+  assert.equal(session.port, port);
+  port.finishOpen();
+  await opening;
+  await shutdown;
+  assert.equal(port.isOpen, false);
+  assert.equal(session.port, null);
+});
+
+test("shutdown waits for a pending close callback and reports close failure for retry", async () => {
+  class ClosingPort extends Port {
+    close(callback) {
+      this.finishClose = (error) => {
+        if (!error) {
+          this.isOpen = false;
+          this.emit("close");
+        }
+        callback(error);
+      };
+    }
+  }
+  const session = new SerialSession(ClosingPort);
+  await session.connect({ path: "/dev/test", baudRate: 115200 });
+  const port = session.port;
+  const closing = session.disconnect();
+  const shutdown = session.shutdown();
+  port.finishClose();
+  await closing;
+  await shutdown;
+  assert.equal(session.port, null);
+  await session.connect({ path: "/dev/test", baudRate: 115200 });
+  const retryPort = session.port;
+  const failingShutdown = session.shutdown();
+  await Promise.resolve();
+  retryPort.finishClose(new Error("close failed"));
+  await assert.rejects(failingShutdown, /close failed/);
+  assert.equal(session.port, retryPort);
+  assert.equal(session.busy, false);
+  const retry = session.shutdown();
+  await Promise.resolve();
+  retryPort.finishClose();
+  await retry;
+  assert.equal(session.port, null);
+});
+
+test("shutdown of an idle session briefly excludes connections and is reusable", async () => {
+  const session = new SerialSession(Port);
+  const shutdown = session.shutdown();
+  await assert.rejects(session.connect({ path: "/dev/test", baudRate: 115200 }), /Disconnect/);
+  await shutdown;
+  await session.shutdown();
+  await session.connect({ path: "/dev/test", baudRate: 115200 });
+  await session.shutdown();
+  assert.equal(session.port, null);
+});
+
+test("shutdown finishes after failed discovery or opening", async () => {
+  class FailedDiscovery extends Port {
+    static async list() {
+      throw new Error("discovery failed");
+    }
+  }
+  class FailedOpening extends Port {
+    open(callback) {
+      callback(new Error("opening failed"));
+    }
+  }
+  for (const Adapter of [FailedDiscovery, FailedOpening]) {
+    const session = new SerialSession(Adapter);
+    const opening = session.connect({ path: "/dev/test", baudRate: 115200 });
+    const shutdown = session.shutdown();
+    await assert.rejects(opening, /failed/);
+    await shutdown;
+    assert.equal(session.port, null);
+    assert.equal(session.busy, false);
+  }
+});

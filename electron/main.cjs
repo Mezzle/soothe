@@ -89,7 +89,7 @@ const createWindow = () => {
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.on("closed", () => {
-    void session.disconnect().catch(() => {});
+    void session.shutdown().catch((error) => console.error("Could not release the serial device:", error));
   });
   window.loadURL(page);
 };
