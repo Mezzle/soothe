@@ -1,6 +1,6 @@
 export default {
   // Exercise the serial lifecycle and byte handling without opening hardware or a GUI.
-  mutate: ["electron/serial.cjs", "src/received-newlines.mts"],
+  mutate: ["electron/serial.cjs", "src/received-data.mts", "src/console-session.mts"],
   testRunner: "command",
   commandRunner: { command: "npm test" },
   coverageAnalysis: "off",

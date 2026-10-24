@@ -1,6 +1,6 @@
 import { FitAddon, init, Terminal } from "ghostty-web";
 import "./style.css";
-import { ReceivedNewlines } from "./received-newlines.mts";
+import { ConsoleSession } from "./console-session.mts";
 
 type Port = { path: string; manufacturer?: string; serialNumber?: string; vendorId?: string; productId?: string };
 type Status = { connected: boolean; error?: string; path?: string };
@@ -36,47 +36,41 @@ $("app").innerHTML = `
 <div id="notice" role="status" hidden></div>
 <section class="console-panel"><div class="console-toolbar"><span><i id="status-dot"></i> <span id="port-label">No device connected</span></span><div><button id="clear">Clear</button><button id="copy">Copy log</button><button id="save">Save log ↗</button></div></div><div class="terminal-wrap"><div id="terminal"></div><div id="empty"><div class="chip">⌘</div><h2>Small device. Open conversation.</h2><p>Plug in your Atom with a USB data cable,<br>choose its port, and connect.</p><span>115200 baud <b>·</b> 8N1 <b>·</b> Ready when you are</span></div></div><form id="command-form"><span class="prompt">›</span><input id="command" aria-label="Command to send" placeholder="Send a command to your device…" autocomplete="off" disabled><select id="ending" aria-label="Line ending"><option value="crlf">CR + LF</option><option value="lf">LF</option><option value="cr">CR</option><option value="none">None</option></select><button id="send" type="submit" disabled>Send ↵</button></form></section>
 <footer><span id="activity">Waiting for a connection</span><span id="bytes">RX 0 B <b> / </b> TX 0 B</span><span>UTF-8 <b>·</b> GHOSTTY</span></footer></main></div>`;
-let selected = "",
-  connected = false,
-  demo = false,
-  busy = false,
-  rx = 0,
-  tx = 0;
-let log = "",
-  decoder = new TextDecoder();
+let selected = "";
 let term: Terminal;
-const receivedNewlines = new ReceivedNewlines();
-let demoTimer: ReturnType<typeof setInterval> | undefined;
 const api = window.serial;
-const requireSerial = (): SerialAPI => {
-  if (!api) {
-    throw new Error("Open the desktop app to connect to serial devices.");
-  }
-  return api;
-};
 const notice = (message: string) => {
   $("notice").textContent = message;
   $("notice").hidden = !message;
 };
+let renderedPhase = "";
+let renderedHasData = false;
+const session = new ConsoleSession(api, {
+  changed: () => {
+    const hasData = session.rx > 0;
+    if (session.phase === renderedPhase && hasData === renderedHasData) {
+      count();
+    } else {
+      renderState();
+    }
+  },
+  display: (data) => term.write(data),
+  reset: () => term.reset(),
+  notice,
+});
 const count = () => {
-  $("bytes").textContent = `RX ${rx.toLocaleString()} B  /  TX ${tx.toLocaleString()} B`;
-};
-const append = (data: Uint8Array) => {
-  term.write(receivedNewlines.transform(data));
-  rx += data.byteLength;
-  log = (log + decoder.decode(data, { stream: true })).slice(-4 * 1024 * 1024);
-  count();
+  $("bytes").textContent = `RX ${session.rx.toLocaleString()} B  /  TX ${session.tx.toLocaleString()} B`;
 };
 const renderStatus = () => {
   let badge = "Disconnected";
   let port = "No device connected";
   let activity = "Waiting for a connection";
-  if (connected) {
+  if (session.connected) {
     badge = "Connected";
-    port = selected;
+    port = session.path;
     activity = "Receiving serial data";
   }
-  if (demo) {
+  if (session.demo) {
     badge = "Demo session";
     port = "demo://atom • simulated output";
     activity = "Simulated device session";
@@ -84,19 +78,22 @@ const renderStatus = () => {
   $("badge").textContent = badge;
   $("port-label").textContent = port;
   $("activity").textContent = activity;
-  $("badge").classList.toggle("live", connected);
-  $("status-dot").classList.toggle("live", connected);
-  $("empty").hidden = connected || rx > 0;
+  $("badge").classList.toggle("live", session.connected);
+  $("status-dot").classList.toggle("live", session.connected);
+  $("empty").hidden = session.connected || session.rx > 0;
 };
 const renderState = () => {
-  const settingsDisabled = connected || busy;
-  const inputDisabled = !connected || busy;
+  renderedPhase = session.phase;
+  renderedHasData = session.rx > 0;
+  count();
+  const settingsDisabled = session.connected || session.busy;
+  const inputDisabled = !session.connected || session.busy;
   document.querySelectorAll<HTMLButtonElement>(".device").forEach((button) => {
     button.disabled = settingsDisabled;
   });
-  const connectLabel = connected ? "Disconnect" : "Connect to device";
-  $("connect").textContent = busy ? "Please wait…" : connectLabel;
-  $("connect").toggleAttribute("disabled", busy || (!connected && (!selected || !api)));
+  const connectLabel = session.connected ? "Disconnect" : "Connect to device";
+  $("connect").textContent = session.busy ? "Please wait…" : connectLabel;
+  $("connect").toggleAttribute("disabled", session.busy || (!session.connected && (!selected || !api)));
   $("baud").toggleAttribute("disabled", settingsDisabled);
   $("demo").toggleAttribute("disabled", settingsDisabled);
   $("command").toggleAttribute("disabled", inputDisabled);
@@ -112,7 +109,7 @@ const refresh = async () => {
     const ports = (await api.list()).sort(
       (a, b) => Number(Boolean(b.vendorId)) - Number(Boolean(a.vendorId)) || a.path.localeCompare(b.path),
     );
-    if (!connected && !ports.some((p) => p.path === selected)) {
+    if (!session.connected && !session.busy && !ports.some((p) => p.path === selected)) {
       selected = ports.find((p) => /usb|acm/i.test(p.path))?.path || ports[0]?.path || "";
     }
     $("devices").replaceChildren();
@@ -125,7 +122,7 @@ const refresh = async () => {
     for (const port of ports) {
       const button = document.createElement("button");
       button.className = `device ${selected === port.path ? "selected" : ""}`;
-      button.disabled = connected || busy;
+      button.disabled = session.connected || session.busy;
       const name = document.createElement("strong");
       name.textContent = port.manufacturer || (/usb/i.test(port.path) ? "USB serial device" : "Serial device");
       const path = document.createElement("small");
@@ -144,69 +141,32 @@ const refresh = async () => {
     notice(String(error));
   }
 };
-const send = async (data: string) => {
-  try {
-    if (!connected) {
-      return;
-    }
-    if (demo) {
-      append(new TextEncoder().encode(`\r\n\x1b[36m[demo]\x1b[0m received: ${data}\r\n`));
-    } else {
-      await requireSerial().write(data);
-    }
-    tx += new TextEncoder().encode(data).length;
-    count();
-  } catch (error) {
-    notice(String(error));
-  }
-};
 $("refresh").onclick = () => void refresh();
 $("connect").onclick = async () => {
-  busy = true;
-  renderState();
-  notice("");
-  try {
-    if (connected) {
-      if (demo) {
-        clearInterval(demoTimer);
-        demo = false;
-      } else {
-        await requireSerial().disconnect();
-      }
-      connected = false;
-    } else {
-      term.reset();
-      rx = tx = 0;
-      log = "";
-      decoder = new TextDecoder();
-      receivedNewlines.reset();
-      count();
-      await requireSerial().connect({ path: selected, baudRate: Number(($("baud") as HTMLSelectElement).value) });
-      connected = true;
+  if (session.connected) {
+    await session.disconnect();
+  } else {
+    await session.connect(selected, Number(($("baud") as HTMLSelectElement).value));
+    if (session.connected) {
       $("device-title").textContent = "Device console";
-      $("device-subtitle").textContent = selected;
+      $("device-subtitle").textContent = session.path;
       term.focus();
     }
-  } catch (error) {
-    notice(String(error));
-  } finally {
-    busy = false;
-    renderState();
-    void refresh();
   }
+  void refresh();
 };
 $("clear").onclick = () => {
   term.clear();
 };
 $("copy").onclick = async () => {
   try {
-    if (!log) {
+    if (!session.log) {
       return notice("No received data to copy yet.");
     }
     if (!api) {
       return notice("Copying logs is available in the desktop app.");
     }
-    await api.copy(log);
+    await api.copy(session.log);
     notice("Console log copied to clipboard.");
   } catch (error) {
     notice(String(error));
@@ -214,13 +174,13 @@ $("copy").onclick = async () => {
 };
 $("save").onclick = async () => {
   try {
-    if (!log) {
+    if (!session.log) {
       return notice("No received data to save yet.");
     }
     if (!api) {
       return notice("Saving logs is available in the desktop app.");
     }
-    if (await api.save(log)) {
+    if (await api.save(session.log)) {
       notice("Console log saved.");
     }
   } catch (error) {
@@ -231,35 +191,15 @@ $("command-form").onsubmit = (event) => {
   event.preventDefault();
   const input = $("command") as HTMLInputElement;
   const ending = { crlf: "\r\n", lf: "\n", cr: "\r", none: "" }[($("ending") as HTMLSelectElement).value] || "";
-  void send(input.value + ending);
+  void session.send(input.value + ending);
   input.value = "";
 };
 $("demo").onclick = () => {
-  demo = connected = true;
-  rx = tx = 0;
-  log = "";
-  decoder = new TextDecoder();
-  receivedNewlines.reset();
-  term.reset();
-  notice("Demo mode. This output is simulated; no USB device is connected.");
-  $("device-title").textContent = "Hello, Atom.";
-  $("device-subtitle").textContent = "A preview of your next serial session.";
-  renderState();
-  append(
-    new TextEncoder().encode(
-      "\x1b[90mSoothe demo console • simulated M5Stack Atom\x1b[0m\r\n\r\nESP32 boot complete\r\n\x1b[32m[ok]\x1b[0m Serial console ready at 115200 baud\r\n\x1b[32m[ok]\x1b[0m RGB LED initialized\r\n\x1b[36m[info]\x1b[0m Type below, or click the terminal to send input.\r\n\r\n",
-    ),
-  );
-  let tick = 0;
-  demoTimer = setInterval(
-    () =>
-      append(
-        new TextEncoder().encode(
-          `\x1b[90m${new Date().toLocaleTimeString()}\x1b[0m  heartbeat=${++tick}  status=\x1b[32mready\x1b[0m\r\n`,
-        ),
-      ),
-    2500,
-  );
+  session.startDemo();
+  if (session.demo) {
+    $("device-title").textContent = "Hello, Atom.";
+    $("device-subtitle").textContent = "A preview of your next serial session.";
+  }
 };
 const start = async () => {
   await init();
@@ -276,18 +216,10 @@ const start = async () => {
   fit.fit();
   fit.observeResize();
   term.onData((data) => {
-    void send(data);
+    void session.send(data);
   });
-  api?.onData((data) => append(new Uint8Array(data)));
-  api?.onStatus((status) => {
-    connected = status.connected;
-    if (status.error) {
-      notice(status.error);
-    } else if (!connected) {
-      notice("Serial connection closed. Reconnect when your device is ready.");
-    }
-    renderState();
-  });
+  api?.onData((data) => session.nativeData(new Uint8Array(data)));
+  api?.onStatus((status) => session.nativeStatus(status));
   await refresh();
   renderState();
 };

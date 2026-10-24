@@ -28,11 +28,11 @@ If no USB port appears, try another data cable and USB port. Some Atom Lite syst
 
 ## Console behavior
 
-- A single active serial session, with explicit connect and disconnect.
+- A single active serial session, with explicit connect and disconnect. Closing the window releases the device, including a connection still opening.
 - Device discovery on startup and through Refresh. Unplugging updates the connection state; reconnection is manual.
 - Incoming LF-only newlines return to column one for display. Existing CRLF and standalone carriage returns are preserved, including across USB reads. Saved logs and RX counts retain the original received data. The line-ending selector controls outgoing commands only.
 - ANSI rendering, terminal keyboard input, selectable command line endings, RX/TX counters, and 10,000 lines of terminal scrollback.
-- Copy log copies the same received session text to the clipboard. Save log exports received UTF-8 text, including ANSI escape sequences. The in-memory log retains the latest 4 million characters. Clear removes terminal scrollback; it does not erase the session log. A new connection starts a new log.
+- Copy log copies the same received session text to the clipboard. Save log exports received UTF-8 text, including ANSI escape sequences. The in-memory log retains the latest 4,194,304 UTF-16 code units. Clear removes terminal scrollback; it does not erase the session log. A new connection attempt starts a new log, even if the attempt fails.
 - Demo mode is labeled and never opens a physical port.
 - Sandboxed renderer, context isolation, restricted IPC, no remote content, and no renderer Node access.
 
@@ -68,7 +68,7 @@ npm run mutate       # Stryker; requires a 100% mutation score
 
 Fallow checks unused code and dependencies, duplication, and complexity. Electron's main process, preload, renderer, and test scripts are explicit entry points. Generated bundles, packaged apps, reports, and mutation sandboxes are excluded. No baseline hides existing findings.
 
-Stryker mutates `electron/serial.cjs` and `src/received-newlines.mts`. It uses the command runner with `npm test`, which runs the Node test suite against each mutation. Tests use fake serial ports and never open hardware. Electron IPC and renderer UI are outside this initial mutation scope; the desktop smoke test covers startup and demo interaction separately. Add new device-independent logic to the mutation scope when it is introduced.
+Stryker mutates `electron/serial.cjs`, `src/received-data.mts`, and `src/console-session.mts`. It uses the command runner with `npm test`, which runs the Node test suite against each mutation. Tests use fake serial ports, controlled connection completions, and a demo clock without opening hardware. Electron IPC and DOM rendering remain outside the mutation scope; the desktop smoke test covers rendering and wiring separately.
 
 Mutation reports are written to `reports/mutation/mutation.html` and `reports/mutation/mutation.json`. Stryker's command runner reports the entire test invocation as one test and cannot provide per-test coverage. The threshold still checks every selected mutation. The sandbox excludes `tsconfig.json` because native Node TypeScript tests do not use it; `npm run typecheck` remains a separate required check.
 
