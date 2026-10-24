@@ -1,0 +1,55 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": ["**", "!.claude", "!.fallow", "!.stryker-tmp", "!reports", "!release", "!dist", "!test-results"]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 120
+  },
+  "javascript": {
+    "formatter": {
+      "bracketSpacing": true
+    }
+  },
+  "linter": {
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        "useArrowFunction": "error"
+      },
+      "style": {
+        "noNonNullAssertion": "error",
+        "useBlockStatements": "error",
+        "useConsistentArrowReturn": {
+          "level": "error",
+          "options": {
+            "style": "asNeeded"
+          }
+        }
+      },
+      "nursery": {
+        "useExhaustiveSwitchCases": "error",
+        "useConsistentFunctionStyle": {
+          "level": "error",
+          "options": {
+            "style": "expression"
+          }
+        }
+      }
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  }
+}

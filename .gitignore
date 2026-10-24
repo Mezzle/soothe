@@ -2,3 +2,7 @@ node_modules/
 dist/
 release/
 test-results/
+.fallow/
+.stryker-tmp/
+reports/
+coverage/
